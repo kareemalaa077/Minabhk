@@ -1,0 +1,81 @@
+name: Build Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Generate Android platform files
+        run: flutter create . --platforms=android --org com.example
+
+      - name: Add Android notification permissions
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("android/app/src/main/AndroidManifest.xml")
+          s = p.read_text()
+          marker = '<manifest xmlns:android="http://schemas.android.com/apk/res/android">'
+          permissions = '''
+              <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+              <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"/>
+              <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+              <uses-permission android:name="android.permission.VIBRATE"/>'''
+          if "android.permission.POST_NOTIFICATIONS" not in s:
+              s = s.replace(marker, marker + permissions, 1)
+          p.write_text(s)
+          PY
+
+      - name: Enable core library desugaring
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("android/app/build.gradle")
+          if not p.exists():
+              p = Path("android/app/build.gradle.kts")
+          s = p.read_text()
+          if p.suffix == ".kts":
+              if "isCoreLibraryDesugaringEnabled = true" not in s:
+                  s = s.replace("compileOptions {", "compileOptions {\\n        isCoreLibraryDesugaringEnabled = true", 1)
+              if 'coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")' not in s:
+                  s += '\\ndependencies {\\n    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")\\n}\\n'
+          else:
+              if "coreLibraryDesugaringEnabled true" not in s:
+                  s = s.replace("compileOptions {", "compileOptions {\\n        coreLibraryDesugaringEnabled true", 1)
+              if 'coreLibraryDesugaring "com.android.tools:desugar_jdk_libs:2.1.4"' not in s:
+                  s += '\\ndependencies {\\n    coreLibraryDesugaring "com.android.tools:desugar_jdk_libs:2.1.4"\\n}\\n'
+          p.write_text(s)
+          PY
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build release APK
+        run: flutter build apk --release
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: monabbihak-release-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
